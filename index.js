@@ -1,8 +1,9 @@
-import knex from 'knex';
+const knex = require('knex');
+const debug = require('debug');
 
-export default class KnexAudit {
-  constructor(knexLogger) {
-    var defaults = knex({
+module.exports = class KnexAudit {
+  constructor(knexLogger, knexLoggerTable) {
+    const defaults = knex({
       client: 'pg',
       connection: {
         host: '127.0.0.1',
@@ -12,9 +13,15 @@ export default class KnexAudit {
       }
     });
     this.knexLogger = knexLogger || defaults;
+    this.knexLoggerTable = knexLoggerTable;
+    
+    this.debugMethod = debug('audit:method');
+    this.debugExecuted = debug('audit:executed');
+    this.debugReceived = debug('audit:received');
+
   }
 
-  audit(knex) {
+  proxy(knex) {
     return new Promise(resolve => {
       resolve(new Proxy(knex, {
         get(target, property) {
@@ -22,7 +29,6 @@ export default class KnexAudit {
           tmp.on('query-response', (response, query) => {
             const { method, options, timeout, cancelOnTimeout, bindings, __knexQueryUid, sql } = query;
             const consult = {
-              method,
               options,
               timeout,
               cancelOnTimeout,
@@ -30,12 +36,19 @@ export default class KnexAudit {
               __knexQueryUid,
               sql
             };
-            console.log('Executed a query:', consult);
-            console.log('Received a response from:', response);
-          });
+            this.debugMethod(method);
+            this.debugExecuted(consult);
+            this.debugReceived(response);
+            this.sendDB(method, consult, response);
+          }).setMaxListeners(0);
           return target[property];
         }
       }));
     });
   }
-}
+
+  sendDB(method, consult, response) {
+    return this.knexLogger(this.knexLoggerTable).insert({method, consult, response});
+  }
+
+};
